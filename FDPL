@@ -1,0 +1,124 @@
+import re
+import csv
+import numpy as np
+from itertools import islice
+filename = 'case.raw'
+
+def data_loader(filename):
+    row = 0
+    end_row_of_bus_data = 0
+    end_row_of_load_data = 0
+    end_row_of_gen_data = 0
+    end_row_of_branch_data = 0
+    with open (filename,'r') as f:
+        for line in f:
+            row += 1
+            x = re.findall("^0 / END OF BUS DATA, BEGIN LOAD DATA$", line) # store bus data
+            if x:
+                end_row_of_bus_data = row
+            x = re.findall("^0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA$", line)
+            if x:
+                end_row_of_load_data = row
+            x = re.findall("^0 / END OF GENERATOR DATA, BEGIN BRANCH DATA$", line)
+            if x:
+                end_row_of_gen_data = row
+            x = re.findall("^0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA$", line)
+            if x:
+                end_row_of_branch_data = row
+    with open(filename, "r") as f:
+        bus_data = np.genfromtxt(islice(f,3,end_row_of_bus_data - 1), delimiter=",")
+    with open(filename, "r") as f:
+        load_data = np.genfromtxt(islice(f,end_row_of_bus_data, end_row_of_load_data - 1), delimiter=",")
+    with open(filename, "r") as f:
+        branch_data = np.genfromtxt(islice(f,end_row_of_gen_data, end_row_of_branch_data - 1), delimiter=",")
+
+        return(bus_data, load_data, branch_data)
+
+#admitance matrix solver
+
+bus_data, load_data, branch_data  = data_loader(filename)
+
+bus_num = np.size(bus_data, 0)
+branch_num = np.size(branch_data, 0)
+load_bus = np.where(bus_data[:,3] == 1)
+gen_bus = np.where
+load_bus_num = np.size(load_bus)
+#admittance matrix
+def admittance(branch_data, bus_data):
+
+    y = np.zeros((bus_num, bus_num), dtype=np.complex)
+    for i in range(0,branch_num):
+        y[int(branch_data[i,0]) - 1,int(branch_data[i,1]) - 1] = 1.0 / complex(branch_data[i,3],branch_data[i,4])
+    y = y + np.transpose(y)
+    diag = np.sum(y,axis = 0)
+    y = -y
+    np.fill_diagonal(y, diag)
+
+    return(y)
+
+import sympy as sp
+import math
+
+Ybus = admittance(branch_data, bus_data)
+theta = np.angle(Ybus)
+
+#Create Voltage Variables
+V = np.array(sp.symbols('V_0:{}'.format(bus_num)))
+Delta = np.array(sp.symbols('dealta_0:{}'.format((bus_num))))
+except_load_bus = np.setdiff1d(np.arange(14), load_bus)
+slack_bus = np.where(bus_data[:,3] == 3)
+bus_except_slack = np.setdiff1d(np.arange(14), slack_bus)
+V[except_load_bus]= np.ones([1,bus_num - load_bus_num]) # the voltage of generator and reference bus be approximated to one
+
+#Create Delta Variables
+
+P = sp.zeros(bus_num,1)
+Q = sp.zeros(bus_num,1)
+X = np.concatenate((np.zeros((1,bus_num - 1)), np.ones((1,load_bus_num))), axis= 1 )
+sum1 = 0
+
+
+# def J11() # Voltage angle of all the buses, except the slack bus
+J11 = np.zeros((bus_num - 1, bus_num - 1))
+for i in np.nditer(bus_except_slack):
+    for k in np.nditer(bus_except_slack):
+        deltaP_theta
+
+
+
+
+
+for i in range(bus_num):
+    for k in range(bus_num):
+        sum1 = sp.exp(sp.Abs(V[i] * V[k] * Ybus[i,k]) * sp.cos(theta[i,k] + Delta[k] - Delta[i])) + sum1
+    P[i] = sum1
+    sum1 = 0
+
+sum1 = 0
+for i in range(load_bus_num):
+    for k in range(bus_num):
+        sum1 = sp.exp(-1 * sp.Abs(V[i] * V[k] * Ybus[i,k]) * sp.sin(theta[i,k] + Delta[k] - Delta[i])) + sum1
+    Q[i] = sum1
+    sum1 = 0
+
+# delete the generator and reference bus index from the variable array
+V_load = np.delete(V, except_load_bus, 0)
+var = np.concatenate((V_load, Delta), axis= 0)
+
+J1 = P.jacobian(var)
+J2 = Q.jacobian(var)
+v_load = np.ones((1,load_bus_num))
+delta = np.zeros((1,bus_num))
+subs = np.concatenate((v_load, delta), 1)
+
+J_1 = sp.lambdify(var, J1[1], "math")
+
+print(V)
+print(V[5])
+print(J1[1])
+print(J1[1].subs({V[4]:1, Delta[0]:0, Delta[4]:0}).doit())
+
+
+
+
+# seperate the bus and load matrix into different file
