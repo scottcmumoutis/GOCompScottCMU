@@ -1,8 +1,12 @@
 import re
-import csv
+import math
 import numpy as np
 from itertools import islice
+
+from numpy.core.multiarray import ndarray
+
 filename = 'case.raw'
+
 
 def data_loader(filename):
     row = 0
@@ -25,100 +29,266 @@ def data_loader(filename):
             x = re.findall("^0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA$", line)
             if x:
                 end_row_of_branch_data = row
+            x = re.findall("^0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA$", line)
+            if x:
+                end_row_of_shunt_data = row
     with open(filename, "r") as f:
-        bus_data = np.genfromtxt(islice(f,3,end_row_of_bus_data - 1), delimiter=",")
+        bus_data = np.genfromtxt(islice(f,3,end_row_of_bus_data - 1), delimiter=",", dtype = np.float64)
     with open(filename, "r") as f:
-        load_data = np.genfromtxt(islice(f,end_row_of_bus_data, end_row_of_load_data - 1), delimiter=",")
+        load_data = np.genfromtxt(islice(f,end_row_of_bus_data, end_row_of_load_data - 1), delimiter=",", dtype=np.float64)
     with open(filename, "r") as f:
-        branch_data = np.genfromtxt(islice(f,end_row_of_gen_data, end_row_of_branch_data - 1), delimiter=",")
+        gen_data = np.genfromtxt(islice(f, end_row_of_shunt_data, end_row_of_gen_data - 1), delimiter=",", dtype=np.float64)
+    with open(filename, "r") as f:
+        branch_data = np.genfromtxt(islice(f,end_row_of_gen_data, end_row_of_branch_data - 1), delimiter=",", dtype=np.float64)
 
-        return(bus_data, load_data, branch_data)
+        return bus_data, load_data, gen_data, branch_data
 
-#admitance matrix solver
 
-bus_data, load_data, branch_data  = data_loader(filename)
 
-bus_num = np.size(bus_data, 0)
+bus_data, load_data, gen_data, branch_data  = data_loader(filename)
+bus_num = np.size(bus_data, 0,)
 branch_num = np.size(branch_data, 0)
 load_bus = np.where(bus_data[:,3] == 1)
-gen_bus = np.where
+gen_bus  = np.where(bus_data[:,3] == 2)
 load_bus_num = np.size(load_bus)
-#admittance matrix
-def admittance(branch_data, bus_data):
-
-    y = np.zeros((bus_num, bus_num), dtype=np.complex)
-    for i in range(0,branch_num):
-        y[int(branch_data[i,0]) - 1,int(branch_data[i,1]) - 1] = 1.0 / complex(branch_data[i,3],branch_data[i,4])
-    y = y + np.transpose(y)
-    diag = np.sum(y,axis = 0)
-    y = -y
-    np.fill_diagonal(y, diag)
-
-    return(y)
-
-import sympy as sp
-import math
-
-Ybus = admittance(branch_data, bus_data)
-theta = np.angle(Ybus)
-
-#Create Voltage Variables
-V = np.array(sp.symbols('V_0:{}'.format(bus_num)))
-Delta = np.array(sp.symbols('dealta_0:{}'.format((bus_num))))
-except_load_bus = np.setdiff1d(np.arange(14), load_bus)
 slack_bus = np.where(bus_data[:,3] == 3)
 bus_except_slack = np.setdiff1d(np.arange(14), slack_bus)
-V[except_load_bus]= np.ones([1,bus_num - load_bus_num]) # the voltage of generator and reference bus be approximated to one
-
-#Create Delta Variables
-
-P = sp.zeros(bus_num,1)
-Q = sp.zeros(bus_num,1)
-X = np.concatenate((np.zeros((1,bus_num - 1)), np.ones((1,load_bus_num))), axis= 1 )
-sum1 = 0
+except_load_bus = np.setdiff1d(np.arange(14), load_bus)
 
 
-# def J11() # Voltage angle of all the buses, except the slack bus
-J11 = np.zeros((bus_num - 1, bus_num - 1))
-for i in np.nditer(bus_except_slack):
-    for k in np.nditer(bus_except_slack):
-        deltaP_theta
+# admittance matrix
+# admittance matrix solver
+def admittance(branch_data, bus_data):
+    y = np.zeros((bus_num, bus_num), dtype=np.complex)
+    for i in range(0, branch_num):
+        y[int(branch_data[i, 0]) - 1, int(branch_data[i, 1]) - 1] = 1.0 / complex(branch_data[i, 3], branch_data[i, 4])
+    y = y + np.transpose(y)
+    diag = np.sum(y, axis=0)
+    y = -y
+    np.fill_diagonal(y, diag)
+    return y
+
+Y_bus = admittance(branch_data, bus_data)
+theta = np.angle(Y_bus)
+Ybus = np.absolute(Y_bus)
 
 
+def Jacobian(filename):
+
+    def deltaP_angle(P_bus, angle_bus):
+        i = P_bus
+        k = angle_bus
+        deltaP_angle = 0
+        add_term = 0
+        if i == k:
+            except_i_bus = np.setdiff1d(bus_except_slack, i)
+            for k in np.nditer(except_i_bus):
+                add_term = math.fabs(Ybus[i, k]) * math.sin(theta[i, k])
+                deltaP_angle = deltaP_angle + add_term
+        else:
+            deltaP_angle = -1 * math.fabs((Ybus[i, k]) * math.sin(theta[i, k]))
+        return deltaP_angle
+
+    def deltaP_v(P_bus, v_bus, bus_except_slack, Ybus, theta): #V of all PV(generators) are known
+        i = P_bus
+        k = v_bus
+        deltaP_v = 0
+        add_term = 0
+        if i == k:
+            except_i_bus = np.setdiff1d(bus_except_slack, i)
+            for k in np.nditer(except_i_bus):
+                add_term = math.fabs(Ybus[i, k]) * math.cos(theta[i, k])
+                deltaP_v = deltaP_v + add_term
+            deltaP_v += 2* Ybus[i,k] * math.cos(theta[i,k])
+        else:
+            deltaP_v = math.fabs((Ybus[i, k]) * math.cos(theta[i, k]))
+        return deltaP_v
+
+    def deltaQ_angle(Q_bus, angle_bus, bus_except_slack, Ybus, theta):
+        i = Q_bus
+        k = angle_bus
+        deltaQ_angle = 0
+        add_term = 0
+        if i == k:
+            except_i_bus = np.setdiff1d(bus_except_slack, i)
+            for k in np.nditer(except_i_bus):
+                add_term = math.fabs(Ybus[i, k]) * math.cos(theta[i, k])
+                deltaQ_angle = deltaQ_angle + add_term
+        else:
+            deltaQ_angle = -1 * math.fabs((Ybus[i, k]) * math.cos(theta[i, k]))
+        return deltaQ_angle
+
+    def deltaQ_v(Q_bus, v_bus,bus_except_slack, Ybus, theta): #V of all PV(generators) are known
+        i = Q_bus
+        k = v_bus
+        deltaQ_v = 0
+        add_term = 0
+        if i == k:
+            except_i_bus = np.setdiff1d(bus_except_slack, i)
+            for k in np.nditer(except_i_bus):
+                add_term = math.fabs(Ybus[i, k]) * math.sin(theta[i, k])
+                deltaQ_v = deltaQ_v + add_term
+            deltaQ_v -= -2* Ybus[i,k] * math.sin(theta[i,k])
+        else:
+            deltaQ_v = math.fabs((Ybus[i, k]) * math.cos(theta[i, k]))
+        return deltaQ_v
+
+    # generate the jacobian matrix J11 J12 J22 J21
+    # size of J11, row: bus number - 1, column: bus number - 1
+    # size of J12, row: bus number - 1, column: number of load bus, becase V for genertors are known
+    # size of J21, row: number of load bus , column: bus number - 1
+    # size of J22, row: number of load bus, column: number of load bus
 
 
+    def J11(bus_num, bus_except_slack):
+        J11 = np.zeros((bus_num-1, bus_num-1))
+        for i in range(bus_num - 1):
+            for k in range(bus_num - 1):
+                P_bus = bus_except_slack[i]
+                angle_bus = bus_except_slack[k]
+                J11[i,k] = deltaP_angle(P_bus, angle_bus)
+        return J11
 
-for i in range(bus_num):
+
+    def J12(load_bus_num, bus_num, bus_except_slack, load_bus):
+        J12 = np.zeros((bus_num - 1, load_bus_num))
+        for i in range(bus_num - 1):
+            for k in range(load_bus_num):
+                P_bus = bus_except_slack[i]
+                v_bus = load_bus[0][k]
+                J12[i,k]= deltaP_v(P_bus, v_bus, bus_except_slack, Ybus, theta)
+        return J12
+
+
+    def J21(load_bus_num, bus_num, bus_except_slack, load_bus):
+        J21 = np.zeros((load_bus_num, bus_num - 1))
+        for i in range(load_bus_num):
+            for k in range(bus_num - 1):
+                Q_bus = load_bus[0][i]
+                angle_bus = bus_except_slack[k]
+                J21[i,k] = deltaQ_angle(Q_bus, angle_bus, bus_except_slack, Ybus, theta)
+        return J21
+
+    def J22(load_bus_num, bus_except_slack, load_bus):
+        J22 = np.zeros((load_bus_num, load_bus_num))
+        for i in range(load_bus_num):
+            for k in range(load_bus_num):
+                Q_bus = load_bus[0][i]
+                v_bus = load_bus[0][k]
+                J22[i, k] = deltaQ_v(Q_bus, v_bus ,bus_except_slack, Ybus, theta)
+        return J22
+
+
+    J11 = J11(bus_num, bus_except_slack)
+    J12 = J12(load_bus_num, bus_num, bus_except_slack, load_bus)
+    J21 = J21(load_bus_num, bus_num, bus_except_slack, load_bus)
+    J22 = J22(load_bus_num, bus_except_slack, load_bus)
+
+    # print("J11", np.shape(J11))
+    # print("J12", np.shape(J12))
+    # print("J21", np.shape(J21))
+    # print("J22", np.shape(J22))
+
+    J1 = np.concatenate((J11, J12), axis= 1)
+    J2 = np.concatenate([J21, J22], axis= 1)
+    J  = np.concatenate((J1 ,  J2), axis= 0)
+
+    return J
+
+J = Jacobian(filename)
+# print(J)
+
+def Real_Power(bus_index ,bus_num):
+    i = bus_index
+    P = 0
     for k in range(bus_num):
-        sum1 = sp.exp(sp.Abs(V[i] * V[k] * Ybus[i,k]) * sp.cos(theta[i,k] + Delta[k] - Delta[i])) + sum1
-    P[i] = sum1
-    sum1 = 0
+        add_term = math.fabs(V[0][bus_index] * V[0][k] * Ybus[i,k]) * math.cos(theta[i,k] * delta[0][k] - delta[0][i])
+        P +=  add_term
 
-sum1 = 0
-for i in range(load_bus_num):
+    return P
+
+def Reactive_Power(bus_index, bus_num):
+    i = bus_index
+    Q = 0
     for k in range(bus_num):
-        sum1 = sp.exp(-1 * sp.Abs(V[i] * V[k] * Ybus[i,k]) * sp.sin(theta[i,k] + Delta[k] - Delta[i])) + sum1
-    Q[i] = sum1
-    sum1 = 0
+        add_term = math.fabs(V[0][bus_index] * V[0][k] * Ybus[i, k]) * math.sin(theta[i, k] * delta[0][k] - delta[0][i])
+        Q +=  add_term
 
-# delete the generator and reference bus index from the variable array
-V_load = np.delete(V, except_load_bus, 0)
-var = np.concatenate((V_load, Delta), axis= 0)
+    return Q
 
-J1 = P.jacobian(var)
-J2 = Q.jacobian(var)
-v_load = np.ones((1,load_bus_num))
-delta = np.zeros((1,bus_num))
-subs = np.concatenate((v_load, delta), 1)
-
-J_1 = sp.lambdify(var, J1[1], "math")
-
-print(V)
-print(V[5])
-print(J1[1])
-print(J1[1].subs({V[4]:1, Delta[0]:0, Delta[4]:0}).doit())
+# calculate the power injection in each bus
+# load bus data column 6 active power component of constant power load in MW
+# load bus data column 6 active reactive component of constant power load in Mvar
+# generator data column 3, generator real power output in MW
+# generator data column 4, generator reactive power in MVar
 
 
+def power_injection():
+    real_power_injection     = np.zeros((1,bus_num))
+    reactive_power_injection = np.zeros((1,bus_num))
+    np.put(real_power_injection, load_data[:,0].astype(int) - 1, -1 * load_data[:, 5])
+    np.put(real_power_injection, gen_data[:,0].astype(int) - 1,  gen_data [:, 2])
+    np.put(reactive_power_injection, load_data[:,0].astype(int) - 1, -1 * load_data[:, 6])
+    np.put(reactive_power_injection, gen_data[:,0].astype(int) - 1,  gen_data [:, 3])
+    real_power_injection = real_power_injection * 0.01
+    reactive_power_injection = reactive_power_injection * 0.01
+    return real_power_injection, reactive_power_injection
 
 
-# seperate the bus and load matrix into different file
+real_P_inject, reactive_Q_inject = power_injection()
+
+
+V = np.zeros((1, bus_num))
+delta = np.zeros((1, bus_num))
+Real_P = np.zeros((1, bus_num))
+Reactive_Q = np.zeros((1, bus_num))
+
+
+def delta_and_V():
+
+    for i in range(bus_num):
+        Real_P[0][i] = Real_Power(bus_index = i, bus_num = bus_num)
+
+    for i in range(bus_num):
+        Reactive_Q[0][i] = Reactive_Power(bus_index = i, bus_num = bus_num)
+
+    delta_P = real_P_inject[0][bus_except_slack] - Real_P[0][bus_except_slack]
+    delta_Q = reactive_Q_inject[0][load_bus[0]] - Reactive_Q[0][load_bus[0]]
+
+    from numpy.linalg import inv
+    delta_v_theta = np.zeros((1, bus_num + load_bus_num -1))
+    delta_v_theta[0] = delta_v_theta[0] + np.dot(inv(J),  np.concatenate((delta_P, delta_Q),axis= 0 ))
+    V[0][bus_except_slack] = delta_v_theta[0][np.arange(bus_num-1)]
+    delta[0][load_bus] = delta_v_theta[0][bus_num - 1 + np.arange(load_bus_num)] # 1 is the number of slack bus
+
+    return delta_P, delta_Q, V, delta
+
+sum = 1
+eps = 10e-5
+j = 0
+while j < 2:
+    delta_P, delta_Q, V, delta = delta_and_V()
+    sum = np.sum(np.fabs(np.concatenate((delta_P, delta_Q), axis=0)))
+    print(sum)
+    j += 1
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
