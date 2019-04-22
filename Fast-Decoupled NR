@@ -1,0 +1,184 @@
+import re
+import math
+import numpy as np
+from itertools import islice
+
+from numpy.core.multiarray import ndarray
+
+filename = 'case.raw'
+
+
+def data_loader(filename):
+    row = 0
+    end_row_of_bus_data = 0
+    end_row_of_load_data = 0
+    end_row_of_gen_data = 0
+    end_row_of_branch_data = 0
+    with open (filename,'r') as f:
+        for line in f:
+            row += 1
+            x = re.findall("^0 / END OF BUS DATA, BEGIN LOAD DATA$", line) # store bus data
+            if x:
+                end_row_of_bus_data = row
+            x = re.findall("^0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA$", line)
+            if x:
+                end_row_of_load_data = row
+            x = re.findall("^0 / END OF GENERATOR DATA, BEGIN BRANCH DATA$", line)
+            if x:
+                end_row_of_gen_data = row
+            x = re.findall("^0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA$", line)
+            if x:
+                end_row_of_branch_data = row
+            x = re.findall("^0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA$", line)
+            if x:
+                end_row_of_shunt_data = row
+    with open(filename, "r") as f:
+        bus_data = np.genfromtxt(islice(f,3,end_row_of_bus_data - 1), delimiter=",", dtype = np.float64)
+    with open(filename, "r") as f:
+        load_data = np.genfromtxt(islice(f,end_row_of_bus_data, end_row_of_load_data - 1), delimiter=",", dtype=np.float64)
+    with open(filename, "r") as f:
+        gen_data = np.genfromtxt(islice(f, end_row_of_shunt_data, end_row_of_gen_data - 1), delimiter=",", dtype=np.float64)
+    with open(filename, "r") as f:
+        branch_data = np.genfromtxt(islice(f,end_row_of_gen_data, end_row_of_branch_data - 1), delimiter=",", dtype=np.float64)
+
+        return bus_data, load_data, gen_data, branch_data
+
+
+
+bus_data, load_data, gen_data, branch_data  = data_loader(filename)
+bus_num = np.size(bus_data, 0,)
+branch_num = np.size(branch_data, 0)
+load_bus = np.array(np.where(bus_data[:,3] == 1))[0]
+gen_bus  = np.where(bus_data[:,3] == 2)
+load_bus_num = np.size(load_bus)
+slack_bus = np.where(bus_data[:,3] == 3)
+bus_except_slack = np.setdiff1d(np.arange(14), slack_bus)
+except_load_bus = np.setdiff1d(np.arange(14), load_bus)
+
+
+# admittance matrix
+# admittance matrix solver
+def admittance(branch_data, bus_data):
+    y = np.zeros((bus_num, bus_num), dtype=np.complex)
+    for i in range(0, branch_num):
+        y[int(branch_data[i, 0]) - 1, int(branch_data[i, 1]) - 1] = 1.0 / complex(branch_data[i, 3], branch_data[i, 4])
+    y = y + np.transpose(y)
+    diag = np.sum(y, axis=0)
+    y = -y
+    np.fill_diagonal(y, diag)
+    return y
+
+Y_bus = admittance(branch_data, bus_data)
+Bus_theta = np.angle(Y_bus)
+Ybus = np.absolute(Y_bus)
+
+
+def B(filename):
+
+    B = np.imag(Y_bus)
+    B_1 =  B[np.ix_(bus_except_slack, bus_except_slack)]
+    B_2 =  B[np.ix_(load_bus, load_bus)]
+
+
+    return B_1, B_2
+
+B_1, B_2 = B(filename)
+
+
+def Real_Power(bus_index ,bus_num, Vm, theta):
+    i = bus_index
+    P = 0
+    for k in range(bus_num):
+        P = P + math.fabs(Vm[bus_index] * Vm[k] * Ybus[i,k]) * math.cos(Bus_theta[i,k] + theta[k] - theta[i])
+
+    return P
+
+def Reactive_Power(bus_index, bus_num, Vm, theta):
+    i = bus_index
+    Q = 0
+    for k in range(bus_num):
+        add_term = -1 * math.fabs(Vm[bus_index]) * math.fabs(Vm[k] * Ybus[i, k]) * math.sin(Bus_theta[i, k] + theta[k] - theta[i])
+        Q +=  add_term
+
+    return Q
+
+# calculate the power injection in each bus
+# load bus data column 6 active power component of constant power load in MW
+# load bus data column 6 active reactive component of constant power load in Mvar
+# generator data column 3, generator real power output in MW
+# generator data column 4, generator reactive power in MVar
+
+
+def power_injection():
+    real_power_injection     = np.zeros((1,bus_num))
+    reactive_power_injection = np.zeros((1,bus_num))
+    np.put(real_power_injection, load_data[:,0].astype(int) - 1, -1 * load_data[:, 5])
+    np.put(real_power_injection, gen_data[:,0].astype(int) - 1,  gen_data [:, 2])
+    np.put(reactive_power_injection, load_data[:,0].astype(int) - 1, -1 * load_data[:, 6])
+    np.put(reactive_power_injection, gen_data[:,0].astype(int) - 1,  gen_data [:, 3])
+    real_power_injection = real_power_injection * 0.01
+    reactive_power_injection = reactive_power_injection * 0.01
+    return real_power_injection, reactive_power_injection
+
+
+real_P_inject, reactive_Q_inject = power_injection()
+
+
+Vm = bus_data[:,7]
+theta = bus_data[:,8]* math.pi / 180
+Real_P = np.zeros((1, bus_num))
+Reactive_Q = np.zeros((1, bus_num))
+
+
+def deltaP_and_Q(Vm, theta):
+
+    for i in range(bus_num):
+        Real_P[0][i] = Real_Power(bus_index = i, bus_num = bus_num, Vm=Vm, theta= theta)
+
+    for i in range(bus_num):
+        Reactive_Q[0][i] = Reactive_Power(bus_index = i, bus_num = bus_num, Vm=Vm, theta= theta)
+
+    delta_P = real_P_inject[0] - Real_P[0]
+    delta_Q = reactive_Q_inject[0] - Reactive_Q[0]
+
+    delta_P_Vm = np.divide(delta_P, Vm)
+    delta_Q_Vm = np.divide(delta_Q, Vm)
+
+    from numpy.linalg import pinv
+
+    delta_v = np.dot(pinv(B_1), delta_P_Vm[bus_except_slack])
+    delta_theta = np.dot(pinv(B_2), delta_Q_Vm[load_bus])
+
+    Vm[bus_except_slack] = delta_v + Vm[bus_except_slack]
+    theta[load_bus] = delta_theta + theta[load_bus]
+
+    return delta_P, delta_Q, Vm, theta
+
+
+eps = 10e-5
+j = 0
+while j < 5:
+    delta_P, delta_Q, Vm, theta = deltaP_and_Q(Vm, theta)
+    maxerror = max(np.max(delta_P),np.max(delta_Q))
+    print(maxerror)
+    j += 1
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
